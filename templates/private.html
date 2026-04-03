@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>Личный чат</title>
+    <style>
+        * { box-sizing: border-box; }
+        
+        body.light {
+            --bg: #f5f5f5;
+            --card-bg: white;
+            --text: #333;
+            --border: #e0e0e0;
+            --header-bg: white;
+            --msg-bg: white;
+            --input-bg: white;
+            --online: #00cc44;
+            --offline: #ccc;
+        }
+        
+        body.dark {
+            --bg: #1a1a2e;
+            --card-bg: #16213e;
+            --text: #eee;
+            --border: #2c3e50;
+            --header-bg: #0f3460;
+            --msg-bg: #1a1a2e;
+            --input-bg: #0f3460;
+            --online: #00ff88;
+            --offline: #555;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: var(--bg);
+            color: var(--text);
+            transition: background 0.3s, color 0.3s;
+        }
+        
+        .site-header {
+            background: var(--header-bg);
+            padding: 12px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .site-header button { width: auto; padding: 8px 16px; margin: 0; }
+        
+        .main-content {
+            display: flex;
+            flex-direction: row;
+            padding: 12px;
+            gap: 20px;
+            height: calc(100vh - 70px);
+        }
+        
+        .users-panel {
+            width: 280px;
+            background: var(--card-bg);
+            border-radius: 16px;
+            padding: 12px;
+            border: 1px solid var(--border);
+            overflow-y: auto;
+            flex-shrink: 0;
+        }
+        
+        .users-panel h4 { margin: 0 0 12px 0; font-size: 16px; }
+        .users-panel ul { margin: 0; padding: 0; list-style: none; }
+        .users-panel li {
+            padding: 10px;
+            margin: 5px 0;
+            cursor: pointer;
+            border-radius: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .users-panel li:hover { background: var(--border); }
+        .users-panel li.active { background: #0066cc; color: white; }
+        
+        .online-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 10px;
+            margin-right: 8px;
+        }
+        .online-indicator.online { background: var(--online); }
+        .online-indicator.offline { background: var(--offline); }
+        
+        .chat-container {
+            flex: 1;
+            background: var(--card-bg);
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .chat-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            background: var(--card-bg);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .clear-chat-btn {
+            background: #dc3545;
+            padding: 6px 12px;
+            font-size: 12px;
+            width: auto;
+        }
+        
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px;
+            background: var(--bg);
+            min-height: 0;
+        }
+        
+        .chat-message {
+            margin: 8px 0;
+            padding: 10px 12px;
+            background: var(--msg-bg);
+            border-radius: 16px;
+            word-wrap: break-word;
+            border: 1px solid var(--border);
+        }
+        
+        .chat-message.sending { opacity: 0.7; }
+        .chat-message .time { font-size: 10px; color: #999; margin-left: 8px; }
+        .chat-message img {
+            max-width: 100%;
+            max-height: 300px;
+            border-radius: 12px;
+            margin-top: 8px;
+            cursor: pointer;
+        }
+        
+        .emoji-picker { display: inline-flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+        .emoji-btn {
+            width: 40px;
+            height: 40px;
+            padding: 0;
+            font-size: 22px;
+            background: var(--bg);
+            border-radius: 12px;
+            cursor: pointer;
+            border: 1px solid var(--border);
+        }
+        
+        .chat-input-area {
+            display: flex;
+            padding: 12px;
+            gap: 8px;
+            background: var(--card-bg);
+            border-top: 1px solid var(--border);
+            flex-wrap: wrap;
+        }
+        .chat-input-area input { flex: 1; margin: 0; font-size: 16px; min-width: 150px; background: var(--input-bg); color: var(--text); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+        .chat-input-area button { width: auto; margin: 0; padding: 12px 20px; }
+        .image-upload-btn { background: #28a745; }
+        
+        .back-btn, .theme-toggle { background: #ff9800; }
+        .back-btn { background: #0066cc; }
+        
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-size: 18px;
+        }
+        
+        @media (max-width: 768px) {
+            .main-content { flex-direction: column; height: auto; }
+            .users-panel { width: 100%; max-height: 200px; }
+            .chat-messages { height: 400px; }
+            .chat-header { flex-direction: column; align-items: flex-start; }
+        }
+    </style>
+</head>
+<body class="light">
+    <div class="loading" id="loading">Загрузка...</div>
+    
+    <div id="mainApp" style="display: none;">
+        <div class="site-header">
+            <span>💬 Личный чат</span>
+            <div style="display: flex; gap: 10px;">
+                <button class="back-btn" onclick="goBack()">🏠 Общий чат</button>
+                <button class="theme-toggle" onclick="toggleTheme()">🌓 Тема</button>
+                <button onclick="logout()">Выйти</button>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div class="users-panel">
+                <h4>👥 Собеседники</h4>
+                <ul id="usersList"></ul>
+            </div>
+            
+            <div class="chat-container">
+                <div class="chat-header">
+                    <div>
+                        <span id="selectedUserName">Выберите собеседника</span>
+                        <span id="selectedUserActive" style="font-size: 12px; margin-left: 10px;"></span>
+                    </div>
+                    <button class="clear-chat-btn" id="clearChatBtn" style="display: none;" onclick="clearPrivateChat()">🗑️ Очистить чат</button>
+                </div>
+                <div class="chat-messages" id="privateMessages">Выберите собеседника</div>
+                <div class="chat-input-area">
+                    <div class="emoji-picker">
+                        <button class="emoji-btn" onclick="addEmoji('😀')">😀</button>
+                        <button class="emoji-btn" onclick="addEmoji('😂')">😂</button>
+                        <button class="emoji-btn" onclick="addEmoji('❤️')">❤️</button>
+                        <button class="emoji-btn" onclick="addEmoji('🔥')">🔥</button>
+                        <button class="emoji-btn" onclick="addEmoji('👍')">👍</button>
+                        <button class="emoji-btn" onclick="addEmoji('🎉')">🎉</button>
+                    </div>
+                    <div style="display: flex; gap: 8px; width: 100%; flex-wrap: wrap;">
+                        <input type="text" id="privateInput" placeholder="Сообщение..." onkeypress="if(event.key==='Enter') sendPrivateMessage()">
+                        <input type="file" id="imageUpload" accept="image/*" style="display:none;" onchange="handleImageUpload(this)">
+                        <button class="image-upload-btn" onclick="document.getElementById('imageUpload').click()">📷</button>
+                        <button onclick="sendPrivateMessage()">Отправить</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentUser = null;
+        let currentUserColor = '#0066cc';
+        let currentTheme = 'light';
+        let selectedUser = null;
+        let updateInterval = null;
+        let activeUpdateInterval = null;
+        
+        // Оптимизация: храним последний ID сообщения для каждого пользователя
+        let lastMessageIdByUser = {};
+        
+        let isUserScrolling = false;
+        let scrollTimeout = null;
+        
+        function goBack() { window.location.href = '/'; }
+        
+        function toggleTheme() {
+            currentTheme = currentTheme === 'light' ? 'dark' : 'light';
+            document.body.className = currentTheme;
+            localStorage.setItem('chat_theme', currentTheme);
+            if (currentUser) {
+                fetch('/api/update_theme', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: currentUser, theme: currentTheme }) });
+            }
+        }
+        
+        function compressImage(file, maxSizeKB = 500) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.src = e.target.result;
+                    img.onload = () => {
+                        let width = img.width, height = img.height, quality = 0.9;
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+                        const maxWidth = 1200, maxHeight = 1200;
+                        if (width > maxWidth) { height = (height * maxWidth) / width; width = maxWidth; }
+                        if (height > maxHeight) { width = (width * maxHeight) / height; height = maxHeight; }
+                        canvas.width = width; canvas.height = height;
+                        ctx.drawImage(img, 0, 0, width, height);
+                        let compressed = canvas.toDataURL('image/jpeg', quality);
+                        while (compressed.length > maxSizeKB * 1024 && quality > 0.3) {
+                            quality -= 0.1;
+                            compressed = canvas.toDataURL('image/jpeg', quality);
+                        }
+                        resolve(compressed);
+                    };
+                    img.onerror = reject;
+                };
+                reader.onerror = reject;
+            });
+        }
+        
+        async function handleImageUpload(fileInput) {
+            let file = fileInput.files[0];
+            if (!file) return;
+            if (!file.type.startsWith('image/')) { alert('Выберите изображение'); return; }
+            try {
+                let compressed = await compressImage(file, 500);
+                document.getElementById('privateInput').value = compressed;
+            } catch(e) { alert('Ошибка'); }
+            fileInput.value = '';
+        }
+        
+        function savePhoto(src) { const a = document.createElement('a'); a.href = src; a.download = `photo_${Date.now()}.jpg`; a.click(); }
+        
+        async function apiCall(url, method = 'GET', body = null) {
+            let options = { method, headers: { 'Content-Type': 'application/json' } };
+            if (body) options.body = JSON.stringify(body);
+            let response = await fetch(url, options);
+            return await response.json();
+        }
+        
+        function addEmoji(emoji) {
+            let input = document.getElementById('privateInput');
+            input.value += emoji;
+            input.focus();
+        }
+        
+        async function updateActiveStatus() {
+            if (currentUser) await fetch('/api/active', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: currentUser }) });
+        }
+        
+        function formatMessage(text) {
+            if (text && text.startsWith('data:image')) return `<img src="${text}" style="max-width:100%; max-height:300px; border-radius:12px; cursor:pointer;" onclick="savePhoto('${text}')">`;
+            let formatted = escapeHtml(text);
+            let imgRegex = /(https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|webp))/gi;
+            formatted = formatted.replace(imgRegex, match => `<img src="${match}" style="max-width:100%; max-height:300px; border-radius:12px; cursor:pointer;" onclick="savePhoto('${match}')">`);
+            let urlRegex = /(https?:\/\/[^\s]+)/gi;
+            formatted = formatted.replace(urlRegex, match => match.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? match : `<a href="${match}" target="_blank">${match}</a>`);
+            return formatted;
+        }
+        
+        function escapeHtml(text) { let div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
+        
+        function formatLastActive(timestamp) {
+            if (!timestamp || timestamp === 0) return 'никогда';
+            let diff = Date.now() - timestamp;
+            let minutes = Math.floor(diff / 60000);
+            if (minutes < 1) return 'только что';
+            if (minutes < 60) return `${minutes} мин назад`;
+            let hours = Math.floor(minutes / 60);
+            if (hours < 24) return `${hours} ч назад`;
+            let days = Math.floor(hours / 24);
+            return `${days} д назад`;
+        }
+        
+        function isAtBottom() {
+            const container = document.getElementById('privateMessages');
+            if (!container) return true;
+            return container.scrollHeight - container.scrollTop - container.clientHeight < 50;
+        }
+        
+        function scrollToBottomIfNeeded() {
+            if (!isUserScrolling && isAtBottom()) {
+                const container = document.getElementById('privateMessages');
+                if (container) {
+                    container.scrollTop = container.scrollHeight;
+                }
+            }
+        }
+        
+        function forceScrollToBottom() {
+            const container = document.getElementById('privateMessages');
+            if (container) {
+                container.scrollTop = container.scrollHeight;
+            }
+        }
+        
+        async function loadUsers() {
+            try {
+                let users = await apiCall('/api/users');
+                let container = document.getElementById('usersList');
+                container.innerHTML = '';
+                for (let u of users) {
+                    if (u.username === currentUser) continue;
+                    let li = document.createElement('li');
+                    li.innerHTML = `<span><span class="online-indicator ${u.online ? 'online' : 'offline'}"></span><span style="color:${u.color}">${escapeHtml(u.username)}</span><span style="font-size:10px; margin-left:8px;">${formatLastActive(u.last_active)}</span></span>`;
+                    li.onclick = () => selectUser(u.username);
+                    if (selectedUser === u.username) li.classList.add('active');
+                    container.appendChild(li);
+                }
+            } catch(e) { console.error(e); }
+        }
+        
+        async function selectUser(username) {
+            selectedUser = username;
+            await loadUsers();
+            document.getElementById('selectedUserName').innerHTML = escapeHtml(username);
+            document.getElementById('clearChatBtn').style.display = 'inline-block';
+            await loadPrivateMessages();
+            await fetch('/api/mark_read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from_user: username, to_user: currentUser }) });
+            let users = await apiCall('/api/users');
+            let user = users.find(u => u.username === username);
+            if (user) {
+                document.getElementById('selectedUserActive').innerHTML = user.online ? '🟢 онлайн' : (user.last_active ? `📅 ${formatLastActive(user.last_active)}` : '');
+            }
+        }
+        
+        async function clearPrivateChat() {
+            if (!selectedUser) return;
+            if (!confirm(`⚠️ Очистить всю переписку с ${selectedUser}?\n\nЭто действие нельзя отменить. Сообщения будут удалены навсегда.`)) return;
+            
+            try {
+                let messages = await apiCall('/api/private_messages', 'POST', { user1: currentUser, user2: selectedUser });
+                for (let msg of messages) {
+                    await fetch('/api/delete_private_message', { 
+                        method: 'POST', 
+                        headers: { 'Content-Type': 'application/json' }, 
+                        body: JSON.stringify({ message_id: msg.id }) 
+                    });
+                }
+                lastMessageIdByUser[selectedUser] = 0;
+                await loadPrivateMessages();
+                alert(`Чат с ${selectedUser} очищен`);
+            } catch(e) {
+                console.error(e);
+                alert('Ошибка при очистке чата');
+            }
+        }
+        
+        async function loadPrivateMessages() {
+            if (!selectedUser) {
+                document.getElementById('privateMessages').innerHTML = '<div class="chat-message">Выберите собеседника</div>';
+                return;
+            }
+            let messages = await apiCall('/api/private_messages', 'POST', { user1: currentUser, user2: selectedUser });
+            let container = document.getElementById('privateMessages');
+            if (!messages.length) { 
+                container.innerHTML = '<div class="chat-message">Нет сообщений</div>';
+                lastMessageIdByUser[selectedUser] = 0;
+                return; 
+            }
+            
+            let currentMaxId = messages[messages.length - 1].id;
+            let lastId = lastMessageIdByUser[selectedUser] || 0;
+            
+            if (currentMaxId > lastId) {
+                let needScroll = !isUserScrolling && isAtBottom();
+                
+                if (lastId === 0) {
+                    container.innerHTML = '';
+                    for (let msg of messages) {
+                        let div = document.createElement('div');
+                        div.className = 'chat-message';
+                        let isFromMe = msg.from_user === currentUser;
+                        div.innerHTML = `<strong style="color:${msg.author_color || '#0066cc'}">${escapeHtml(isFromMe ? 'Вы' : msg.from_user)}</strong><span class="time">${msg.time}</span><br>${formatMessage(msg.text)}`;
+                        container.appendChild(div);
+                    }
+                } else {
+                    let newMessages = messages.filter(msg => msg.id > lastId);
+                    for (let msg of newMessages) {
+                        let div = document.createElement('div');
+                        div.className = 'chat-message';
+                        let isFromMe = msg.from_user === currentUser;
+                        div.innerHTML = `<strong style="color:${msg.author_color || '#0066cc'}">${escapeHtml(isFromMe ? 'Вы' : msg.from_user)}</strong><span class="time">${msg.time}</span><br>${formatMessage(msg.text)}`;
+                        container.appendChild(div);
+                    }
+                }
+                
+                lastMessageIdByUser[selectedUser] = currentMaxId;
+                
+                if (needScroll) {
+                    container.scrollTop = container.scrollHeight;
+                }
+            }
+        }
+        
+        async function sendPrivateMessage() {
+            if (!selectedUser) { alert('Выберите собеседника'); return; }
+            let input = document.getElementById('privateInput');
+            let text = input.value.trim();
+            if (!text) return;
+            let now = new Date();
+            let timeStr = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
+            let tempId = 'temp_priv_' + Date.now();
+            let container = document.getElementById('privateMessages');
+            let tempDiv = document.createElement('div');
+            tempDiv.className = 'chat-message sending';
+            tempDiv.id = tempId;
+            tempDiv.innerHTML = `<strong style="color:${currentUserColor}">Вы</strong><span class="time">${timeStr}</span><br>${formatMessage(text)}<div class="message-actions"><small>⏳ отправляется...</small></div>`;
+            container.appendChild(tempDiv);
+            forceScrollToBottom();
+            input.value = '';
+            try {
+                let result = await apiCall('/api/send_private', 'POST', { from_user: currentUser, to_user: selectedUser, text: text, time: timeStr, timestamp: Date.now() });
+                document.getElementById(tempId)?.remove();
+                if (result.message_id) {
+                    lastMessageIdByUser[selectedUser] = result.message_id;
+                }
+                await loadPrivateMessages();
+                forceScrollToBottom();
+            } catch(e) { document.getElementById(tempId)?.remove(); alert('Ошибка'); }
+        }
+        
+        async function checkAuth() {
+            let savedUser = localStorage.getItem('chat_current_user');
+            if (!savedUser) {
+                window.location.href = '/';
+                return false;
+            }
+            
+            let users = await apiCall('/api/users');
+            let userExists = users.some(u => u.username === savedUser);
+            
+            if (!userExists && savedUser !== 'admin') {
+                localStorage.removeItem('chat_current_user');
+                window.location.href = '/';
+                return false;
+            }
+            
+            return savedUser;
+        }
+        
+        async function init() {
+            let user = await checkAuth();
+            if (!user) return;
+            
+            currentUser = user;
+            
+            let loginRes = await apiCall('/api/login', 'POST', { username: currentUser, password: '' });
+            if (loginRes.success) {
+                currentUserColor = loginRes.color || '#0066cc';
+                currentTheme = loginRes.theme || 'light';
+                document.body.className = currentTheme;
+                localStorage.setItem('chat_theme', currentTheme);
+            } else {
+                let users = await apiCall('/api/users');
+                let userData = users.find(u => u.username === currentUser);
+                if (userData) {
+                    currentUserColor = userData.color || '#0066cc';
+                }
+            }
+            
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('mainApp').style.display = 'block';
+            
+            await loadUsers();
+            updateActiveStatus();
+            
+            if (activeUpdateInterval) clearInterval(activeUpdateInterval);
+            activeUpdateInterval = setInterval(() => updateActiveStatus(), 15000);
+            
+            if (updateInterval) clearInterval(updateInterval);
+            // ОПТИМИЗАЦИЯ: увеличен интервал до 4 секунд
+            updateInterval = setInterval(() => { 
+                loadUsers(); 
+                if (selectedUser) loadPrivateMessages(); 
+            }, 4000);
+            
+            const chatContainer = document.getElementById('privateMessages');
+            if (chatContainer) {
+                chatContainer.addEventListener('scroll', () => {
+                    isUserScrolling = true;
+                    if (scrollTimeout) clearTimeout(scrollTimeout);
+                    scrollTimeout = setTimeout(() => {
+                        isUserScrolling = false;
+                        scrollToBottomIfNeeded();
+                    }, 300);
+                });
+            }
+        }
+        
+        function logout() {
+            localStorage.removeItem('chat_current_user');
+            window.location.href = '/';
+        }
+        
+        init();
+    </script>
+</body>
+</html>
