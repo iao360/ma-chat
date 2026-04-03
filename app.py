@@ -6,8 +6,8 @@ import time
 app = Flask(__name__)
 
 # ========== НАСТРОЙКИ SUPABASE ==========
-SUPABASE_URL = "https://llkfbzaancbjlyxwjqmo.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxsa2ZiemFhbmNiamx5eHdqcW1vIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUxNDU2OTEsImV4cCI6MjA5MDcyMTY5MX0._ZgQ9uVejj5gJwOT9_B5Z3sAMpqHMXEVwSal4Dkls64"
+SUPABASE_URL = "https://vxtjirpwhuqjwhlybqkh.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ4dGppcnB3aHVxandobHlicWtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUyMzEzNTUsImV4cCI6MjA5MDgwNzM1NX0.4pyOcy73aEVDLVIHk1Hu0XLWZkaCKKXRmL9DFkYQfhE"
 
 HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -16,7 +16,7 @@ HEADERS = {
 }
 
 active_users = {}
-ACTIVE_TIMEOUT = 30
+ACTIVE_TIMEOUT = 60  # Увеличил до 60 секунд
 
 def supabase_get(table, select="*", eq_column=None, eq_value=None, limit=None, order=None):
     url = f"{SUPABASE_URL}/rest/v1/{table}?select={select}"
@@ -54,7 +54,7 @@ def private():
 
 @app.route('/api/users')
 def get_users():
-    users = supabase_get("users", select="username,color,last_active,theme", eq_column="is_approved", eq_value=1)
+    users = supabase_get("users", select="username,color,last_active,theme", eq_column=None, eq_value=None)
     if isinstance(users, dict) and "error" in users:
         return jsonify([])
     
@@ -99,7 +99,7 @@ def get_private_messages():
     
     filtered = [m for m in messages if (m["from_user"] == user1 and m["to_user"] == user2) or (m["from_user"] == user2 and m["to_user"] == user1)]
     
-    users = supabase_get("users", select="username,color", eq_column="is_approved", eq_value=1)
+    users = supabase_get("users", select="username,color", eq_column=None, eq_value=None)
     user_colors = {u["username"]: u.get("color", "#0066cc") for u in users if isinstance(u, dict)}
     
     for msg in filtered:
@@ -120,6 +120,16 @@ def send_private():
             "is_read": False
         })
         return jsonify({'success': True, 'message_id': result.get('id') if result else None})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/delete_private_message', methods=['POST'])
+def delete_private_message():
+    try:
+        data = request.json
+        message_id = data.get('message_id')
+        supabase_delete("private_messages", "id", message_id)
+        return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -145,22 +155,14 @@ def unread_count():
     unread = [m for m in messages if not m.get("is_read", False)]
     return jsonify({'count': len(unread)})
 
-@app.route('/api/pending')
-def get_pending():
-    pending = supabase_get("pending", select="username")
-    if isinstance(pending, dict) and "error" in pending:
-        return jsonify([])
-    usernames = [p["username"] for p in pending]
-    return jsonify(usernames)
-
 @app.route('/api/messages')
 def get_messages():
-    messages = supabase_get("messages", select="*", order="timestamp.desc", limit=200)
+    messages = supabase_get("messages", select="*", order="timestamp.desc", limit=100)
     if isinstance(messages, dict) and "error" in messages:
         return jsonify([])
     messages.sort(key=lambda x: x.get("timestamp", 0))
     
-    users = supabase_get("users", select="username,color", eq_column="is_approved", eq_value=1)
+    users = supabase_get("users", select="username,color", eq_column=None, eq_value=None)
     user_colors = {u["username"]: u.get("color", "#0066cc") for u in users if isinstance(u, dict)}
     
     for msg in messages:
@@ -180,11 +182,9 @@ def register():
         if existing and len(existing) > 0:
             return jsonify({'success': False, 'error': 'Пользователь уже существует'})
         
-        existing_pending = supabase_get("pending", select="username", eq_column="username", eq_value=username)
-        if existing_pending and len(existing_pending) > 0:
-            return jsonify({'success': False, 'error': 'Заявка уже отправлена'})
+        # Сразу добавляем пользователя в таблицу users (без подтверждения админом)
+        supabase_post("users", {"username": username, "password": password, "is_approved": 1, "color": color, "last_active": 0, "theme": "light"})
         
-        supabase_post("pending", {"username": username, "password": password, "color": color})
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -200,41 +200,12 @@ def login():
         
         if users and len(users) > 0:
             user = users[0]
-            if user.get("password") == password and user.get("is_approved") == 1:
+            if user.get("password") == password:
                 active_users[username] = time.time()
                 supabase_patch("users", "username", username, {"last_active": int(time.time() * 1000)})
                 return jsonify({'success': True, 'color': user.get("color", "#0066cc"), 'theme': user.get("theme", "light")})
         
         return jsonify({'success': False, 'error': 'Неверный логин или пароль'})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
-@app.route('/api/approve', methods=['POST'])
-def approve():
-    try:
-        data = request.json
-        username = data.get('username')
-        
-        pending = supabase_get("pending", select="*", eq_column="username", eq_value=username)
-        if not pending or len(pending) == 0:
-            return jsonify({'success': False})
-        
-        password = pending[0]["password"]
-        color = pending[0].get("color", "#0066cc")
-        supabase_post("users", {"username": username, "password": password, "is_approved": 1, "color": color, "last_active": 0, "theme": "light"})
-        supabase_delete("pending", "username", username)
-        
-        return jsonify({'success': True})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
-@app.route('/api/reject', methods=['POST'])
-def reject():
-    try:
-        data = request.json
-        username = data.get('username')
-        supabase_delete("pending", "username", username)
-        return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
@@ -294,16 +265,6 @@ def send_message():
             "timestamp": data.get('timestamp')
         })
         return jsonify({'success': True, 'message_id': result.get('id') if result else None})
-    except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
-
-@app.route('/api/delete_private_message', methods=['POST'])
-def delete_private_message():
-    try:
-        data = request.json
-        message_id = data.get('message_id')
-        supabase_delete("private_messages", "id", message_id)
-        return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
 
