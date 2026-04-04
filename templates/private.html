@@ -85,6 +85,19 @@
         .users-panel li:hover { background: var(--border); }
         .users-panel li.active { background: #0066cc; color: white; }
         
+        .unread-indicator {
+            background: red;
+            color: white;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            font-size: 11px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+        
         .online-indicator {
             display: inline-block;
             width: 10px;
@@ -248,10 +261,7 @@
         let selectedUser = null;
         let updateInterval = null;
         let activeUpdateInterval = null;
-        
-        // Оптимизация: храним последний ID сообщения для каждого пользователя
-        let lastMessageIdByUser = {};
-        
+        let unreadFromUsers = {};
         let isUserScrolling = false;
         let scrollTimeout = null;
         
@@ -358,20 +368,31 @@
         function scrollToBottomIfNeeded() {
             if (!isUserScrolling && isAtBottom()) {
                 const container = document.getElementById('privateMessages');
-                if (container) {
-                    container.scrollTop = container.scrollHeight;
-                }
+                if (container) container.scrollTop = container.scrollHeight;
             }
         }
         
         function forceScrollToBottom() {
             const container = document.getElementById('privateMessages');
-            if (container) {
-                container.scrollTop = container.scrollHeight;
-            }
+            if (container) container.scrollTop = container.scrollHeight;
+        }
+        
+        async function loadUnreadInfo() {
+            if (!currentUser) return;
+            try {
+                let res = await fetch('/api/unread_count', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: currentUser }) });
+                let data = await res.json();
+                unreadFromUsers = {};
+                if (data.unread_from) {
+                    for (let u of data.unread_from) {
+                        unreadFromUsers[u] = true;
+                    }
+                }
+            } catch(e) { console.error(e); }
         }
         
         async function loadUsers() {
+            await loadUnreadInfo();
             try {
                 let users = await apiCall('/api/users');
                 let container = document.getElementById('usersList');
@@ -379,7 +400,14 @@
                 for (let u of users) {
                     if (u.username === currentUser) continue;
                     let li = document.createElement('li');
+                    let hasUnread = unreadFromUsers[u.username];
                     li.innerHTML = `<span><span class="online-indicator ${u.online ? 'online' : 'offline'}"></span><span style="color:${u.color}">${escapeHtml(u.username)}</span><span style="font-size:10px; margin-left:8px;">${formatLastActive(u.last_active)}</span></span>`;
+                    if (hasUnread) {
+                        let badge = document.createElement('span');
+                        badge.className = 'unread-indicator';
+                        badge.textContent = '●';
+                        li.appendChild(badge);
+                    }
                     li.onclick = () => selectUser(u.username);
                     if (selectedUser === u.username) li.classList.add('active');
                     container.appendChild(li);
@@ -399,22 +427,17 @@
             if (user) {
                 document.getElementById('selectedUserActive').innerHTML = user.online ? '🟢 онлайн' : (user.last_active ? `📅 ${formatLastActive(user.last_active)}` : '');
             }
+            await loadUsers();
         }
         
         async function clearPrivateChat() {
             if (!selectedUser) return;
             if (!confirm(`⚠️ Очистить всю переписку с ${selectedUser}?\n\nЭто действие нельзя отменить. Сообщения будут удалены навсегда.`)) return;
-            
             try {
                 let messages = await apiCall('/api/private_messages', 'POST', { user1: currentUser, user2: selectedUser });
                 for (let msg of messages) {
-                    await fetch('/api/delete_private_message', { 
-                        method: 'POST', 
-                        headers: { 'Content-Type': 'application/json' }, 
-                        body: JSON.stringify({ message_id: msg.id }) 
-                    });
+                    await fetch('/api/delete_private_message', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message_id: msg.id }) });
                 }
-                lastMessageIdByUser[selectedUser] = 0;
                 await loadPrivateMessages();
                 alert(`Чат с ${selectedUser} очищен`);
             } catch(e) {
@@ -422,6 +445,8 @@
                 alert('Ошибка при очистке чата');
             }
         }
+        
+        let lastMessageIdByUser = {};
         
         async function loadPrivateMessages() {
             if (!selectedUser) {
@@ -438,10 +463,9 @@
             
             let currentMaxId = messages[messages.length - 1].id;
             let lastId = lastMessageIdByUser[selectedUser] || 0;
+            let needScroll = !isUserScrolling && isAtBottom();
             
             if (currentMaxId > lastId) {
-                let needScroll = !isUserScrolling && isAtBottom();
-                
                 if (lastId === 0) {
                     container.innerHTML = '';
                     for (let msg of messages) {
@@ -461,12 +485,8 @@
                         container.appendChild(div);
                     }
                 }
-                
                 lastMessageIdByUser[selectedUser] = currentMaxId;
-                
-                if (needScroll) {
-                    container.scrollTop = container.scrollHeight;
-                }
+                if (needScroll) container.scrollTop = container.scrollHeight;
             }
         }
         
@@ -487,11 +507,8 @@
             forceScrollToBottom();
             input.value = '';
             try {
-                let result = await apiCall('/api/send_private', 'POST', { from_user: currentUser, to_user: selectedUser, text: text, time: timeStr, timestamp: Date.now() });
+                await apiCall('/api/send_private', 'POST', { from_user: currentUser, to_user: selectedUser, text: text, time: timeStr, timestamp: Date.now() });
                 document.getElementById(tempId)?.remove();
-                if (result.message_id) {
-                    lastMessageIdByUser[selectedUser] = result.message_id;
-                }
                 await loadPrivateMessages();
                 forceScrollToBottom();
             } catch(e) { document.getElementById(tempId)?.remove(); alert('Ошибка'); }
@@ -503,25 +520,20 @@
                 window.location.href = '/';
                 return false;
             }
-            
             let users = await apiCall('/api/users');
             let userExists = users.some(u => u.username === savedUser);
-            
             if (!userExists && savedUser !== 'admin') {
                 localStorage.removeItem('chat_current_user');
                 window.location.href = '/';
                 return false;
             }
-            
             return savedUser;
         }
         
         async function init() {
             let user = await checkAuth();
             if (!user) return;
-            
             currentUser = user;
-            
             let loginRes = await apiCall('/api/login', 'POST', { username: currentUser, password: '' });
             if (loginRes.success) {
                 currentUserColor = loginRes.color || '#0066cc';
@@ -531,27 +543,19 @@
             } else {
                 let users = await apiCall('/api/users');
                 let userData = users.find(u => u.username === currentUser);
-                if (userData) {
-                    currentUserColor = userData.color || '#0066cc';
-                }
+                if (userData) currentUserColor = userData.color || '#0066cc';
             }
-            
             document.getElementById('loading').style.display = 'none';
             document.getElementById('mainApp').style.display = 'block';
-            
             await loadUsers();
             updateActiveStatus();
-            
             if (activeUpdateInterval) clearInterval(activeUpdateInterval);
             activeUpdateInterval = setInterval(() => updateActiveStatus(), 15000);
-            
             if (updateInterval) clearInterval(updateInterval);
-            // ОПТИМИЗАЦИЯ: увеличен интервал до 4 секунд
             updateInterval = setInterval(() => { 
                 loadUsers(); 
                 if (selectedUser) loadPrivateMessages(); 
             }, 4000);
-            
             const chatContainer = document.getElementById('privateMessages');
             if (chatContainer) {
                 chatContainer.addEventListener('scroll', () => {
