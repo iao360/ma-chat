@@ -100,6 +100,27 @@
         
         .site-header button { width: auto; padding: 8px 16px; margin: 0; }
         
+        .private-chat-btn {
+            background: #9c27b0;
+            position: relative;
+        }
+        
+        .unread-badge {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background: red;
+            color: white;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+        
         .main-content {
             display: flex;
             flex-direction: column;
@@ -143,15 +164,6 @@
             margin-bottom: 12px;
             border: 1px solid var(--admin-border);
         }
-        
-        .pending-user {
-            background: var(--card-bg);
-            margin: 8px 0;
-            padding: 10px;
-            border-radius: 12px;
-            font-size: 14px;
-        }
-        .pending-user button { width: auto; padding: 6px 12px; margin: 5px 5px 0 0; font-size: 13px; }
         
         .chat-container {
             background: var(--card-bg);
@@ -213,8 +225,7 @@
         .chat-input-area button { width: auto; margin: 0; padding: 12px 20px; }
         .image-upload-btn { background: #28a745; }
         
-        .theme-toggle, .private-chat-btn { background: #ff9800; width: auto; }
-        .private-chat-btn { background: #9c27b0; }
+        .theme-toggle { background: #ff9800; width: auto; }
         
         @media (min-width: 768px) {
             .main-content { flex-direction: row; gap: 20px; align-items: flex-start; }
@@ -263,7 +274,7 @@
         <div class="site-header">
             <span>Добро пожаловать, <b id="userName"></b>!</span>
             <div style="display: flex; gap: 10px;">
-                <button class="private-chat-btn" onclick="goToPrivateChat()">💬 Личные сообщения</button>
+                <button class="private-chat-btn" id="privateChatBtn" onclick="goToPrivateChat()">💬 Личные сообщения</button>
                 <button class="theme-toggle" onclick="toggleTheme()">🌓 Тема</button>
                 <button onclick="confirmLogout()">Выйти</button>
             </div>
@@ -306,7 +317,6 @@
             <div id="adminPanel" class="admin-panel hidden">
                 <h4>👑 Админ-панель</h4>
                 <button onclick="clearChat()">🗑️ Очистить чат</button>
-                <div id="pendingList">Загрузка...</div>
             </div>
         </div>
     </div>
@@ -318,12 +328,7 @@
         let updateInterval = null;
         let activeUpdateInterval = null;
         let notificationPermission = false;
-        
-        // Оптимизация: храним последний ID сообщения
         let lastMessageId = 0;
-        let lastMessageTimestamp = 0;
-        
-        // Переменные для умной прокрутки
         let isUserScrolling = false;
         let scrollTimeout = null;
         
@@ -332,6 +337,27 @@
         
         function goToPrivateChat() {
             window.location.href = '/private';
+        }
+        
+        function updatePrivateChatBadge(count) {
+            let btn = document.getElementById('privateChatBtn');
+            let existingBadge = btn.querySelector('.unread-badge');
+            if (existingBadge) existingBadge.remove();
+            if (count > 0) {
+                let badge = document.createElement('span');
+                badge.className = 'unread-badge';
+                badge.textContent = count > 99 ? '99+' : count;
+                btn.appendChild(badge);
+            }
+        }
+        
+        async function checkUnreadCount() {
+            if (!currentUser) return;
+            try {
+                let res = await fetch('/api/unread_count', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: currentUser }) });
+                let data = await res.json();
+                updatePrivateChatBadge(data.count || 0);
+            } catch(e) { console.error(e); }
         }
         
         function toggleTheme() {
@@ -378,8 +404,7 @@
             if (!file.type.startsWith('image/')) { alert('Выберите изображение'); return; }
             try {
                 let compressed = await compressImage(file, 500);
-                let input = document.getElementById('publicInput');
-                input.value = compressed;
+                document.getElementById('publicInput').value = compressed;
             } catch(e) { alert('Ошибка'); }
             fileInput.value = '';
         }
@@ -449,17 +474,13 @@
         function scrollToBottomIfNeeded() {
             if (!isUserScrolling && isAtBottom()) {
                 const container = document.getElementById('publicMessages');
-                if (container) {
-                    container.scrollTop = container.scrollHeight;
-                }
+                if (container) container.scrollTop = container.scrollHeight;
             }
         }
         
         function forceScrollToBottom() {
             const container = document.getElementById('publicMessages');
-            if (container) {
-                container.scrollTop = container.scrollHeight;
-            }
+            if (container) container.scrollTop = container.scrollHeight;
         }
         
         async function loadUsers() {
@@ -496,7 +517,6 @@
             }
         }
         
-        // Оптимизированная загрузка сообщений - только новые
         async function loadPublicMessages() {
             try {
                 let messages = await apiCall('/api/messages');
@@ -509,19 +529,12 @@
                     return; 
                 }
                 
-                let newMessages = [];
                 let currentMaxId = messages[messages.length - 1].id;
+                let needScroll = !isUserScrolling && isAtBottom();
                 
-                // Если есть новые сообщения
                 if (currentMaxId > lastMessageId) {
-                    // Находим только новые сообщения
-                    for (let msg of messages) {
-                        if (msg.id > lastMessageId) {
-                            newMessages.push(msg);
-                        }
-                    }
+                    let newMessages = lastMessageId === 0 ? messages : messages.filter(msg => msg.id > lastMessageId);
                     
-                    // Уведомление о новых сообщениях (только если не от себя)
                     if (newMessages.length > 0 && lastMessageId !== 0 && currentUser) {
                         let lastNewMsg = newMessages[newMessages.length - 1];
                         if (lastNewMsg.author !== currentUser) {
@@ -529,9 +542,6 @@
                         }
                     }
                     
-                    let needScroll = !isUserScrolling && isAtBottom();
-                    
-                    // Если это первая загрузка - отображаем все
                     if (lastMessageId === 0) {
                         container.innerHTML = '';
                         for (let msg of messages) {
@@ -551,7 +561,6 @@
                             container.appendChild(div);
                         }
                     } else {
-                        // Добавляем только новые сообщения в конец
                         for (let msg of newMessages) {
                             let div = document.createElement('div');
                             div.className = 'chat-message';
@@ -571,10 +580,7 @@
                     }
                     
                     lastMessageId = currentMaxId;
-                    
-                    if (needScroll) {
-                        container.scrollTop = container.scrollHeight;
-                    }
+                    if (needScroll) container.scrollTop = container.scrollHeight;
                 }
             } catch(e) { console.error(e); }
         }
@@ -595,12 +601,8 @@
             forceScrollToBottom();
             input.value = '';
             try {
-                let result = await apiCall('/api/send_message', 'POST', { author: currentUser, text: text, time: timeStr, timestamp: Date.now() });
+                await apiCall('/api/send_message', 'POST', { author: currentUser, text: text, time: timeStr, timestamp: Date.now() });
                 document.getElementById(tempId)?.remove();
-                // Обновляем последний ID для быстрого отображения
-                if (result.message_id) {
-                    lastMessageId = result.message_id;
-                }
                 await loadPublicMessages();
                 forceScrollToBottom();
             } catch(e) { document.getElementById(tempId)?.remove(); alert('Ошибка'); }
@@ -609,7 +611,6 @@
         async function deleteMessage(id) {
             if (confirm('Удалить?')) { 
                 await apiCall('/api/delete_message', 'POST', { message_id: id }); 
-                // Сбрасываем lastMessageId, чтобы перезагрузить всё
                 lastMessageId = 0;
                 loadPublicMessages(); 
             }
@@ -623,23 +624,6 @@
             }
         }
         
-        async function loadPending() {
-            if (currentUser !== 'admin') return;
-            let pending = await apiCall('/api/pending');
-            let container = document.getElementById('pendingList');
-            if (!pending.length) { container.innerHTML = '<p>Нет заявок</p>'; return; }
-            container.innerHTML = '';
-            for (let name of pending) {
-                let div = document.createElement('div');
-                div.className = 'pending-user';
-                div.innerHTML = `<strong>${escapeHtml(name)}</strong><br><button onclick="approveUser('${name}')">✅ Одобрить</button> <button onclick="rejectUser('${name}')">❌ Отклонить</button>`;
-                container.appendChild(div);
-            }
-        }
-        
-        async function approveUser(name) { await apiCall('/api/approve', 'POST', { username: name }); loadPending(); loadUsers(); }
-        async function rejectUser(name) { await apiCall('/api/reject', 'POST', { username: name }); loadPending(); }
-        
         async function register() {
             let name = document.getElementById('regName').value.trim();
             let pass = document.getElementById('regPass').value.trim();
@@ -647,7 +631,7 @@
             if (!name || !pass) { document.getElementById('regError').innerText = 'Заполните поля'; return; }
             let res = await apiCall('/api/register', 'POST', { username: name, password: pass, color });
             if (res.success) {
-                document.getElementById('regSuccess').innerText = 'Заявка отправлена!';
+                document.getElementById('regSuccess').innerText = 'Аккаунт создан! Войдите.';
                 setTimeout(() => showLogin(), 2000);
             } else document.getElementById('regError').innerText = res.error;
         }
@@ -667,6 +651,7 @@
                 updateActiveStatus();
                 if (activeUpdateInterval) clearInterval(activeUpdateInterval);
                 activeUpdateInterval = setInterval(() => updateActiveStatus(), 15000);
+                setInterval(() => checkUnreadCount(), 5000);
             } else document.getElementById('loginError').innerText = res.error;
         }
         
@@ -679,11 +664,10 @@
             await loadPublicMessages();
             if (currentUser === 'admin') document.getElementById('adminPanel').classList.remove('hidden');
             if (updateInterval) clearInterval(updateInterval);
-            // ОПТИМИЗАЦИЯ: увеличен интервал до 4 секунд
             updateInterval = setInterval(() => { 
                 loadPublicMessages(); 
                 loadUsers(); 
-                if (currentUser === 'admin') loadPending(); 
+                checkUnreadCount();
             }, 4000);
             setTimeout(() => showNotificationBanner(), 500);
             
@@ -698,6 +682,8 @@
                     }, 300);
                 });
             }
+            
+            await checkUnreadCount();
         }
         
         function confirmLogout() { if (confirm('Выйти?')) logout(); }
