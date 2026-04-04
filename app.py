@@ -44,9 +44,8 @@ def supabase_delete(table, eq_column, eq_value):
     response = requests.delete(url, headers=HEADERS)
     return response.status_code == 204
 
-# Автоудаление неактивных пользователей (запускается при каждом запросе, но не чаще раза в час)
 last_cleanup = 0
-CLEANUP_INTERVAL = 3600  # 1 час
+CLEANUP_INTERVAL = 3600
 
 def cleanup_inactive_users():
     global last_cleanup
@@ -54,23 +53,16 @@ def cleanup_inactive_users():
     if now - last_cleanup < CLEANUP_INTERVAL:
         return
     last_cleanup = now
-    
     try:
-        # Находим пользователей, которые зарегистрировались, но НИ РАЗУ не заходили (last_seen = 0)
-        # И прошло больше 15 минут с момента регистрации
-        fifteen_min_ago = int((now - 900) * 1000)  # 15 минут в миллисекундах
-        
-        users = supabase_get("users", select="username,last_seen,timestamp", eq_column=None, eq_value=None)
+        fifteen_min_ago = int((now - 900) * 1000)
+        users = supabase_get("users", select="username,last_seen", eq_column=None, eq_value=None)
         if users and isinstance(users, list):
             for user in users:
                 username = user.get("username")
                 if username == "admin":
                     continue
                 last_seen = user.get("last_seen", 0)
-                # Проверяем, есть ли у пользователя поле created_at или используем last_seen
-                # Если last_seen == 0, значит пользователь ни разу не заходил
                 if last_seen == 0:
-                    # Проверяем время регистрации (если есть) или просто удаляем
                     supabase_delete("users", "username", username)
                     print(f"Удалён неактивный пользователь: {username}")
     except Exception as e:
@@ -86,12 +78,16 @@ def private():
     cleanup_inactive_users()
     return render_template('private.html')
 
+@app.route('/groups')
+def groups():
+    cleanup_inactive_users()
+    return render_template('groups.html')
+
 @app.route('/api/users')
 def get_users():
     users = supabase_get("users", select="username,color,last_active,theme,last_seen", eq_column=None, eq_value=None)
     if isinstance(users, dict) and "error" in users:
         return jsonify([])
-    
     for user in users:
         username = user.get("username")
         if username in active_users and time.time() - active_users[username] < ACTIVE_TIMEOUT:
@@ -100,7 +96,6 @@ def get_users():
             user["online"] = False
             if username in active_users:
                 del active_users[username]
-    
     return jsonify(users)
 
 @app.route('/api/active', methods=['POST'])
@@ -122,24 +117,256 @@ def update_theme():
         supabase_patch("users", "username", username, {"theme": theme})
     return jsonify({'success': True})
 
+# ========== ГРУППОВЫЕ ЧАТЫ API ==========
+
+@app.route('/api/groups', methods=['GET'])
+def get_groups():
+    username = request.args.get('username')
+    if not username:
+        return jsonify([])
+    # Получаем группы, где пользователь участник
+    members = supabase_get("group_members", select="group_id", eq_column="username", eq_value=username)
+    if isinstance(members, dict) and "error" in members:
+        return jsonify([])
+    group_ids = [m["group_id"] for m in members]
+    if not group_ids:
+        return jsonify([])
+    # Получаем данные групп
+    groups = []
+    for gid in group_ids:
+        group_data = supabase_get("groups", select="*", eq_column="id", eq_value=gid)
+        if group_data and len(group_data) > 0:
+            groups.append(group_data[0])
+    return jsonify(groups)
+
+@app.route('/api/all_groups', methods=['GET'])
+def get_all_groups():
+    groups = supabase_get("groups", select="id,name,color,creator", eq_column=None, eq_value=None)
+    if isinstance(groups, dict) and "error" in groups:
+        return jsonify([])
+    return jsonify(groups)
+
+@app.route('/api/create_group', methods=['POST'])
+def create_group():
+    try:
+        data = request.json
+        name = data.get('name')
+        color = data.get('color', '#0066cc')
+        creator = data.get('creator')
+        now_ms = int(time.time() * 1000)
+        # Создаём группу
+        result = supabase_post("groups", {"name": name, "color": color, "creator": creator, "created_at": now_ms})
+        if result and "id" in result:
+            group_id = result["id"]
+            # Добавляем создателя в участники
+            supabase_post("group_members", {"group_id": group_id, "username": creator, "joined_at": now_ms})
+            # Добавляем запись о прочитанных сообщениях
+            supabase_post("group_unread", {"group_id": group_id, "username": creator, "last_read": now_ms})
+            return jsonify({'success': True, 'group_id': group_id})
+        return jsonify({'success': False, 'error': 'Не удалось создать группу'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/group_members', methods=['POST'])
+def get_group_members():
+    data = request.json
+    group_id = data.get('group_id')
+    members = supabase_get("group_members", select="username", eq_column="group_id", eq_value=group_id)
+    if isinstance(members, dict) and "error" in members:
+        return jsonify([])
+    usernames = [m["username"] for m in members]
+    # Получаем цвета и онлайн статус
+    users = supabase_get("users", select="username,color", eq_column=None, eq_value=None)
+    user_colors = {u["username"]: u.get("color", "#0066cc") for u in users if isinstance(u, dict)}
+    result = []
+    for username in usernames:
+        is_online = username in active_users and time.time() - active_users[username] < ACTIVE_TIMEOUT
+        result.append({"username": username, "color": user_colors.get(username, "#0066cc"), "online": is_online})
+    return jsonify(result)
+
+@app.route('/api/add_member', methods=['POST'])
+def add_member():
+    try:
+        data = request.json
+        group_id = data.get('group_id')
+        username = data.get('username')
+        creator = data.get('creator')
+        # Проверяем, что создатель группы
+        group = supabase_get("groups", select="creator", eq_column="id", eq_value=group_id)
+        if not group or len(group) == 0 or group[0]["creator"] != creator:
+            return jsonify({'success': False, 'error': 'Только создатель может добавлять участников'})
+        # Проверяем количество участников
+        members = supabase_get("group_members", select="username", eq_column="group_id", eq_value=group_id)
+        if len(members) >= 40:
+            return jsonify({'success': False, 'error': 'В группе максимум 40 участников'})
+        # Проверяем, не состоит ли уже
+        existing = [m for m in members if m["username"] == username]
+        if existing:
+            return jsonify({'success': False, 'error': 'Пользователь уже в группе'})
+        now_ms = int(time.time() * 1000)
+        supabase_post("group_members", {"group_id": group_id, "username": username, "joined_at": now_ms})
+        supabase_post("group_unread", {"group_id": group_id, "username": username, "last_read": now_ms})
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/remove_member', methods=['POST'])
+def remove_member():
+    try:
+        data = request.json
+        group_id = data.get('group_id')
+        username = data.get('username')
+        creator = data.get('creator')
+        group = supabase_get("groups", select="creator", eq_column="id", eq_value=group_id)
+        if not group or len(group) == 0 or group[0]["creator"] != creator:
+            return jsonify({'success': False, 'error': 'Только создатель может удалять участников'})
+        supabase_delete("group_members", "group_id", group_id, "username", username)
+        supabase_delete("group_unread", "group_id", group_id, "username", username)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/leave_group', methods=['POST'])
+def leave_group():
+    try:
+        data = request.json
+        group_id = data.get('group_id')
+        username = data.get('username')
+        supabase_delete("group_members", "group_id", group_id, "username", username)
+        supabase_delete("group_unread", "group_id", group_id, "username", username)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/delete_group', methods=['POST'])
+def delete_group():
+    try:
+        data = request.json
+        group_id = data.get('group_id')
+        creator = data.get('creator')
+        group = supabase_get("groups", select="creator", eq_column="id", eq_value=group_id)
+        if not group or len(group) == 0 or group[0]["creator"] != creator:
+            return jsonify({'success': False, 'error': 'Только создатель может удалить группу'})
+        # Удаляем сообщения группы
+        messages = supabase_get("group_messages", select="id", eq_column="group_id", eq_value=group_id)
+        if messages:
+            for msg in messages:
+                supabase_delete("group_messages", "id", msg["id"])
+        # Удаляем участников
+        supabase_delete("group_members", "group_id", group_id)
+        # Удаляем непрочитанные
+        supabase_delete("group_unread", "group_id", group_id)
+        # Удаляем группу
+        supabase_delete("groups", "id", group_id)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/group_messages', methods=['POST'])
+def get_group_messages():
+    data = request.json
+    group_id = data.get('group_id')
+    messages = supabase_get("group_messages", select="*", eq_column="group_id", eq_value=group_id, order="timestamp.asc", limit=200)
+    if isinstance(messages, dict) and "error" in messages:
+        return jsonify([])
+    users = supabase_get("users", select="username,color", eq_column=None, eq_value=None)
+    user_colors = {u["username"]: u.get("color", "#0066cc") for u in users if isinstance(u, dict)}
+    for msg in messages:
+        msg["author_color"] = user_colors.get(msg["author"], "#0066cc")
+    return jsonify(messages)
+
+@app.route('/api/send_group_message', methods=['POST'])
+def send_group_message():
+    try:
+        data = request.json
+        result = supabase_post("group_messages", {
+            "group_id": data.get('group_id'),
+            "author": data.get('author'),
+            "text": data.get('text'),
+            "time": data.get('time'),
+            "timestamp": data.get('timestamp')
+        })
+        return jsonify({'success': True, 'message_id': result.get('id') if result else None})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/group_unread_count', methods=['POST'])
+def group_unread_count():
+    try:
+        data = request.json
+        username = data.get('username')
+        # Получаем все группы пользователя
+        members = supabase_get("group_members", select="group_id", eq_column="username", eq_value=username)
+        if isinstance(members, dict) and "error" in members:
+            return jsonify({'count': 0, 'groups': {}})
+        unread_counts = {}
+        total = 0
+        for m in members:
+            group_id = m["group_id"]
+            # Получаем последнее прочитанное время
+            unread_data = supabase_get("group_unread", select="last_read", eq_column="group_id", eq_value=group_id, eq_column2="username", eq_value2=username)
+            last_read = 0
+            if unread_data and len(unread_data) > 0:
+                last_read = unread_data[0]["last_read"]
+            # Считаем новые сообщения
+            messages = supabase_get("group_messages", select="id", eq_column="group_id", eq_value=group_id, eq_column2="timestamp", eq_value2=last_read, operator=">")
+            if messages and len(messages) > 0:
+                count = len(messages)
+                unread_counts[group_id] = count
+                total += count
+        return jsonify({'count': total, 'groups': unread_counts})
+    except Exception as e:
+        return jsonify({'count': 0, 'groups': {}})
+
+@app.route('/api/mark_group_read', methods=['POST'])
+def mark_group_read():
+    try:
+        data = request.json
+        group_id = data.get('group_id')
+        username = data.get('username')
+        now_ms = int(time.time() * 1000)
+        # Обновляем или вставляем запись о прочитанном
+        existing = supabase_get("group_unread", select="*", eq_column="group_id", eq_value=group_id, eq_column2="username", eq_value2=username)
+        if existing and len(existing) > 0:
+            supabase_patch("group_unread", "group_id", group_id, "username", username, {"last_read": now_ms})
+        else:
+            supabase_post("group_unread", {"group_id": group_id, "username": username, "last_read": now_ms})
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+@app.route('/api/clear_group_chat', methods=['POST'])
+def clear_group_chat():
+    try:
+        data = request.json
+        group_id = data.get('group_id')
+        creator = data.get('creator')
+        group = supabase_get("groups", select="creator", eq_column="id", eq_value=group_id)
+        if not group or len(group) == 0 or group[0]["creator"] != creator:
+            return jsonify({'success': False, 'error': 'Только создатель может очистить чат'})
+        messages = supabase_get("group_messages", select="id", eq_column="group_id", eq_value=group_id)
+        if messages:
+            for msg in messages:
+                supabase_delete("group_messages", "id", msg["id"])
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+# ========== ОСТАЛЬНЫЕ API (без изменений) ==========
+
 @app.route('/api/private_messages', methods=['POST'])
 def get_private_messages():
     data = request.json
     user1 = data.get('user1')
     user2 = data.get('user2')
-    
     messages = supabase_get("private_messages", select="*", order="timestamp.asc", limit=200)
     if isinstance(messages, dict) and "error" in messages:
         return jsonify([])
-    
     filtered = [m for m in messages if (m["from_user"] == user1 and m["to_user"] == user2) or (m["from_user"] == user2 and m["to_user"] == user1)]
-    
     users = supabase_get("users", select="username,color", eq_column=None, eq_value=None)
     user_colors = {u["username"]: u.get("color", "#0066cc") for u in users if isinstance(u, dict)}
-    
     for msg in filtered:
         msg["author_color"] = user_colors.get(msg["from_user"], "#0066cc")
-    
     return jsonify(filtered)
 
 @app.route('/api/send_private', methods=['POST'])
@@ -174,7 +401,6 @@ def mark_read():
         data = request.json
         from_user = data.get('from_user')
         to_user = data.get('to_user')
-        
         messages = supabase_get("private_messages", select="id", eq_column="from_user", eq_value=from_user)
         if messages:
             for msg in messages:
@@ -189,7 +415,7 @@ def unread_count():
     username = data.get('username')
     messages = supabase_get("private_messages", select="*", eq_column="to_user", eq_value=username)
     if isinstance(messages, dict) and "error" in messages:
-        return jsonify({'count': 0})
+        return jsonify({'count': 0, 'unread_from': []})
     unread = [m for m in messages if not m.get("is_read", False)]
     return jsonify({'count': len(unread), 'unread_from': list(set([m["from_user"] for m in unread]))})
 
@@ -199,13 +425,10 @@ def get_messages():
     if isinstance(messages, dict) and "error" in messages:
         return jsonify([])
     messages.sort(key=lambda x: x.get("timestamp", 0))
-    
     users = supabase_get("users", select="username,color", eq_column=None, eq_value=None)
     user_colors = {u["username"]: u.get("color", "#0066cc") for u in users if isinstance(u, dict)}
-    
     for msg in messages:
         msg["author_color"] = user_colors.get(msg["author"], "#0066cc")
-    
     return jsonify(messages)
 
 @app.route('/api/register', methods=['POST'])
@@ -215,22 +438,10 @@ def register():
         username = data.get('username')
         password = data.get('password')
         color = data.get('color', '#0066cc')
-        
         existing = supabase_get("users", select="username", eq_column="username", eq_value=username)
         if existing and len(existing) > 0:
             return jsonify({'success': False, 'error': 'Пользователь уже существует'})
-        
-        now_ms = int(time.time() * 1000)
-        supabase_post("users", {
-            "username": username, 
-            "password": password, 
-            "is_approved": 1, 
-            "color": color, 
-            "last_active": 0,
-            "last_seen": 0,
-            "theme": "light"
-        })
-        
+        supabase_post("users", {"username": username, "password": password, "is_approved": 1, "color": color, "last_active": 0, "last_seen": 0, "theme": "light"})
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -241,9 +452,7 @@ def login():
         data = request.json
         username = data.get('username')
         password = data.get('password')
-        
         users = supabase_get("users", select="*", eq_column="username", eq_value=username)
-        
         if users and len(users) > 0:
             user = users[0]
             if user.get("password") == password:
@@ -251,7 +460,6 @@ def login():
                 now_ms = int(time.time() * 1000)
                 supabase_patch("users", "username", username, {"last_active": now_ms, "last_seen": now_ms})
                 return jsonify({'success': True, 'color': user.get("color", "#0066cc"), 'theme': user.get("theme", "light")})
-        
         return jsonify({'success': False, 'error': 'Неверный логин или пароль'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
@@ -261,21 +469,17 @@ def delete_user():
     try:
         data = request.json
         username = data.get('username')
-        
         messages = supabase_get("messages", select="id", eq_column="author", eq_value=username)
-        if messages and len(messages) > 0:
+        if messages:
             for msg in messages:
                 supabase_delete("messages", "id", msg["id"])
-        
         private = supabase_get("private_messages", select="id")
         if private:
             for msg in private:
                 supabase_delete("private_messages", "id", msg["id"])
-        
         supabase_delete("users", "username", username)
         if username in active_users:
             del active_users[username]
-        
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
