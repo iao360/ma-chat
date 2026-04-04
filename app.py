@@ -16,7 +16,7 @@ HEADERS = {
 }
 
 active_users = {}
-ACTIVE_TIMEOUT = 60  # Увеличил до 60 секунд
+ACTIVE_TIMEOUT = 60
 
 def supabase_get(table, select="*", eq_column=None, eq_value=None, limit=None, order=None):
     url = f"{SUPABASE_URL}/rest/v1/{table}?select={select}"
@@ -44,17 +44,51 @@ def supabase_delete(table, eq_column, eq_value):
     response = requests.delete(url, headers=HEADERS)
     return response.status_code == 204
 
+# Автоудаление неактивных пользователей (запускается при каждом запросе, но не чаще раза в час)
+last_cleanup = 0
+CLEANUP_INTERVAL = 3600  # 1 час
+
+def cleanup_inactive_users():
+    global last_cleanup
+    now = time.time()
+    if now - last_cleanup < CLEANUP_INTERVAL:
+        return
+    last_cleanup = now
+    
+    try:
+        # Находим пользователей, которые зарегистрировались, но НИ РАЗУ не заходили (last_seen = 0)
+        # И прошло больше 15 минут с момента регистрации
+        fifteen_min_ago = int((now - 900) * 1000)  # 15 минут в миллисекундах
+        
+        users = supabase_get("users", select="username,last_seen,timestamp", eq_column=None, eq_value=None)
+        if users and isinstance(users, list):
+            for user in users:
+                username = user.get("username")
+                if username == "admin":
+                    continue
+                last_seen = user.get("last_seen", 0)
+                # Проверяем, есть ли у пользователя поле created_at или используем last_seen
+                # Если last_seen == 0, значит пользователь ни разу не заходил
+                if last_seen == 0:
+                    # Проверяем время регистрации (если есть) или просто удаляем
+                    supabase_delete("users", "username", username)
+                    print(f"Удалён неактивный пользователь: {username}")
+    except Exception as e:
+        print(f"Ошибка при очистке: {e}")
+
 @app.route('/')
 def index():
+    cleanup_inactive_users()
     return render_template('index.html')
 
 @app.route('/private')
 def private():
+    cleanup_inactive_users()
     return render_template('private.html')
 
 @app.route('/api/users')
 def get_users():
-    users = supabase_get("users", select="username,color,last_active,theme", eq_column=None, eq_value=None)
+    users = supabase_get("users", select="username,color,last_active,theme,last_seen", eq_column=None, eq_value=None)
     if isinstance(users, dict) and "error" in users:
         return jsonify([])
     
@@ -75,7 +109,8 @@ def update_active():
     username = data.get('username')
     if username:
         active_users[username] = time.time()
-        supabase_patch("users", "username", username, {"last_active": int(time.time() * 1000)})
+        now_ms = int(time.time() * 1000)
+        supabase_patch("users", "username", username, {"last_active": now_ms, "last_seen": now_ms})
     return jsonify({'success': True})
 
 @app.route('/api/update_theme', methods=['POST'])
@@ -135,15 +170,18 @@ def delete_private_message():
 
 @app.route('/api/mark_read', methods=['POST'])
 def mark_read():
-    data = request.json
-    from_user = data.get('from_user')
-    to_user = data.get('to_user')
-    
-    messages = supabase_get("private_messages", select="id", eq_column="from_user", eq_value=from_user)
-    if messages:
-        for msg in messages:
-            supabase_patch("private_messages", "id", msg["id"], {"is_read": True})
-    return jsonify({'success': True})
+    try:
+        data = request.json
+        from_user = data.get('from_user')
+        to_user = data.get('to_user')
+        
+        messages = supabase_get("private_messages", select="id", eq_column="from_user", eq_value=from_user)
+        if messages:
+            for msg in messages:
+                supabase_patch("private_messages", "id", msg["id"], {"is_read": True})
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
 @app.route('/api/unread_count', methods=['POST'])
 def unread_count():
@@ -153,7 +191,7 @@ def unread_count():
     if isinstance(messages, dict) and "error" in messages:
         return jsonify({'count': 0})
     unread = [m for m in messages if not m.get("is_read", False)]
-    return jsonify({'count': len(unread)})
+    return jsonify({'count': len(unread), 'unread_from': list(set([m["from_user"] for m in unread]))})
 
 @app.route('/api/messages')
 def get_messages():
@@ -182,8 +220,16 @@ def register():
         if existing and len(existing) > 0:
             return jsonify({'success': False, 'error': 'Пользователь уже существует'})
         
-        # Сразу добавляем пользователя в таблицу users (без подтверждения админом)
-        supabase_post("users", {"username": username, "password": password, "is_approved": 1, "color": color, "last_active": 0, "theme": "light"})
+        now_ms = int(time.time() * 1000)
+        supabase_post("users", {
+            "username": username, 
+            "password": password, 
+            "is_approved": 1, 
+            "color": color, 
+            "last_active": 0,
+            "last_seen": 0,
+            "theme": "light"
+        })
         
         return jsonify({'success': True})
     except Exception as e:
@@ -202,7 +248,8 @@ def login():
             user = users[0]
             if user.get("password") == password:
                 active_users[username] = time.time()
-                supabase_patch("users", "username", username, {"last_active": int(time.time() * 1000)})
+                now_ms = int(time.time() * 1000)
+                supabase_patch("users", "username", username, {"last_active": now_ms, "last_seen": now_ms})
                 return jsonify({'success': True, 'color': user.get("color", "#0066cc"), 'theme': user.get("theme", "light")})
         
         return jsonify({'success': False, 'error': 'Неверный логин или пароль'})
