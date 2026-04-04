@@ -236,6 +236,27 @@
         @media (max-width: 767px) {
             .chat-messages { height: 350px; }
         }
+
+ .groups-chat-btn {
+        position: relative;
+    }
+    .unread-badge-group {
+        position: absolute;
+        top: -8px;
+        right: -8px;
+        background: red;
+        color: white;
+        border-radius: 50%;
+        width: 20px;
+        height: 20px;
+        font-size: 11px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+    }
+
+
     </style>
 </head>
 <body class="light">
@@ -275,6 +296,7 @@
             <span>Добро пожаловать, <b id="userName"></b>!</span>
             <div style="display: flex; gap: 10px;">
                 <button class="private-chat-btn" id="privateChatBtn" onclick="goToPrivateChat()">💬 Личные сообщения</button>
+                <button id="groupsChatBtn" class="groups-chat-btn" onclick="goToGroups()" style="background: #28a745; position: relative;">👥 Группы</button>
                 <button class="theme-toggle" onclick="toggleTheme()">🌓 Тема</button>
                 <button onclick="confirmLogout()">Выйти</button>
             </div>
@@ -681,9 +703,12 @@
                         scrollToBottomIfNeeded();
                     }, 300);
                 });
+
             }
             
             await checkUnreadCount();
+await updateGroupUnreadBadge();
+            setInterval(() => updateGroupUnreadBadge(), 10000);
         }
         
         function confirmLogout() { if (confirm('Выйти?')) logout(); }
@@ -735,6 +760,39 @@
                 } else localStorage.removeItem(STORAGE_USER_KEY);
             }
         }
-    </script>
+   
+    // Функция для перехода на страницу групповых чатов
+    function goToGroups() {
+        window.location.href = '/groups';
+    }
+    
+    // Функция для обновления счётчика непрочитанных сообщений в группах
+    async function updateGroupUnreadBadge() {
+        if (!currentUser) return;
+        try {
+            let res = await fetch('/api/group_unread_count', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: currentUser })
+            });
+            let data = await res.json();
+            let count = data.count || 0;
+            
+            let groupsBtn = document.getElementById('groupsChatBtn');
+            if (!groupsBtn) return;
+            
+            let existingBadge = groupsBtn.querySelector('.unread-badge-group');
+            if (existingBadge) existingBadge.remove();
+            
+            if (count > 0) {
+                let badge = document.createElement('span');
+                badge.className = 'unread-badge-group';
+                badge.textContent = count > 99 ? '99+' : count;
+                groupsBtn.appendChild(badge);
+            }
+        } catch(e) { console.error(e); }
+    }
+</script>
+
 </body>
 </html>
