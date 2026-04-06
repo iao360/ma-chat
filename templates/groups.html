@@ -536,9 +536,10 @@
         
         async function loadGroups() {
             try {
+                console.log('Загрузка групп для пользователя:', currentUser);
                 let response = await fetch('/api/groups?username=' + encodeURIComponent(currentUser));
                 let groups = await response.json();
-                console.log('Загружены группы:', groups);
+                console.log('Ответ сервера (группы):', groups);
                 
                 let container = document.getElementById('groupsList');
                 container.innerHTML = '';
@@ -559,6 +560,7 @@
                     div.onclick = () => selectGroup(g.id);
                     container.appendChild(div);
                 }
+                console.log('Отображено групп:', groups.length);
             } catch(e) {
                 console.error('Ошибка загрузки групп:', e);
                 document.getElementById('groupsList').innerHTML = '<div style="text-align:center; padding:20px; color:red;">Ошибка загрузки групп</div>';
@@ -777,13 +779,14 @@
                 
                 if (data.success) {
                     document.getElementById('newGroupName').value = '';
+                    alert('Группа создана! Обновляем список...');
+                    // Принудительно перезагружаем список групп
                     await loadGroups();
                     await loadUnreadCounts();
                     if (data.group_id) {
                         selectedGroup = data.group_id;
                         await selectGroup(data.group_id);
                     }
-                    alert('Группа создана!');
                 } else {
                     alert(data.error || 'Ошибка создания группы');
                 }
@@ -823,6 +826,8 @@
             let user = await checkAuth();
             if (!user) return;
             currentUser = user;
+            
+            console.log('Инициализация для пользователя:', currentUser);
             
             let loginRes = await apiCall('/api/login', 'POST', { username: currentUser, password: '' });
             if (loginRes.success) {
