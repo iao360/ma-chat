@@ -104,6 +104,11 @@
             overflow-y: auto;
         }
         
+        .groups-list h4 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+        }
+        
         .group-item {
             padding: 12px;
             margin: 5px 0;
@@ -317,14 +322,10 @@
             max-width: 400px;
             width: 90%;
         }
-        .modal-content input, .modal-content select {
-            width: 100%;
-            padding: 10px;
-            margin: 10px 0;
-            border-radius: 8px;
-            border: 1px solid var(--border);
-            background: var(--input-bg);
-            color: var(--text);
+        .modal-content button {
+            margin: 10px 5px 0 0;
+            width: auto;
+            padding: 8px 16px;
         }
         
         @media (max-width: 900px) {
@@ -432,7 +433,6 @@
         let scrollTimeout = null;
         let lastGroupMessageId = {};
         let unreadGroupCounts = {};
-        let allUsers = [];
         
         function goBack() { window.location.href = '/'; }
         
@@ -534,29 +534,27 @@
             if (container) container.scrollTop = container.scrollHeight;
         }
         
-        async function loadAllUsers() {
-            let users = await apiCall('/api/users');
-            allUsers = users;
-        }
-        
         async function loadGroups() {
-            let groups = await apiCall('/api/groups?username=' + encodeURIComponent(currentUser));
-            let container = document.getElementById('groupsList');
-            container.innerHTML = '';
-            for (let g of groups) {
-                let div = document.createElement('div');
-                div.className = 'group-item';
-                if (selectedGroup === g.id) div.classList.add('active');
-                let unread = unreadGroupCounts[g.id] || 0;
-                div.innerHTML = `<div class="group-name" style="color: ${g.color};">${escapeHtml(g.name)}</div>
-                                <div class="group-creator">создатель: ${escapeHtml(g.creator)}</div>
-                                ${unread > 0 ? `<span class="unread-badge-group">${unread > 99 ? '99+' : unread}</span>` : ''}`;
-                div.onclick = () => selectGroup(g.id);
-                container.appendChild(div);
-            }
-            if (groups.length === 0) {
-                container.innerHTML = '<div style="text-align:center; padding:20px;">У вас нет групп.<br>Создайте первую!</div>';
-            }
+            try {
+                let groups = await apiCall('/api/groups?username=' + encodeURIComponent(currentUser));
+                let container = document.getElementById('groupsList');
+                container.innerHTML = '';
+                if (!groups.length) {
+                    container.innerHTML = '<div style="text-align:center; padding:20px;">У вас нет групп.<br>Создайте первую!</div>';
+                    return;
+                }
+                for (let g of groups) {
+                    let div = document.createElement('div');
+                    div.className = 'group-item';
+                    if (selectedGroup === g.id) div.classList.add('active');
+                    let unread = unreadGroupCounts[g.id] || 0;
+                    div.innerHTML = `<div class="group-name" style="color: ${g.color};">${escapeHtml(g.name)}</div>
+                                    <div class="group-creator">создатель: ${escapeHtml(g.creator)}</div>
+                                    ${unread > 0 ? `<span class="unread-badge-group">${unread > 99 ? '99+' : unread}</span>` : ''}`;
+                    div.onclick = () => selectGroup(g.id);
+                    container.appendChild(div);
+                }
+            } catch(e) { console.error('Ошибка загрузки групп:', e); }
         }
         
         async function selectGroup(groupId) {
@@ -609,8 +607,9 @@
             for (let m of members) {
                 let li = document.createElement('li');
                 li.innerHTML = `<span><span class="online-indicator ${m.online ? 'online' : 'offline'}"></span><span style="color:${m.color}">${escapeHtml(m.username)}</span></span>`;
-                if (selectedGroup && currentUser === (await getGroupCreator())) {
-                    if (m.username !== currentUser) {
+                if (selectedGroup) {
+                    let creator = await getGroupCreator();
+                    if (currentUser === creator && m.username !== currentUser) {
                         let removeBtn = document.createElement('button');
                         removeBtn.textContent = '❌';
                         removeBtn.className = 'remove-member-btn';
@@ -737,23 +736,11 @@
         }
         
         async function loadUnreadCounts() {
-            let res = await apiCall('/api/group_unread_count', 'POST', { username: currentUser });
-            unreadGroupCounts = res.groups || {};
-            let totalUnread = res.count || 0;
-            updateGlobalBadge(totalUnread);
-            await loadGroups();
-        }
-        
-        function updateGlobalBadge(count) {
-            let btn = document.querySelector('.back-btn');
-            let existing = btn.querySelector('.unread-badge-group');
-            if (existing) existing.remove();
-            if (count > 0) {
-                let badge = document.createElement('span');
-                badge.className = 'unread-badge-group';
-                badge.textContent = count > 99 ? '99+' : count;
-                btn.appendChild(badge);
-            }
+            try {
+                let res = await apiCall('/api/group_unread_count', 'POST', { username: currentUser });
+                unreadGroupCounts = res.groups || {};
+                await loadGroups();
+            } catch(e) { console.error(e); }
         }
         
         async function markGroupRead() {
@@ -767,14 +754,31 @@
             let name = document.getElementById('newGroupName').value.trim();
             let color = document.getElementById('newGroupColor').value;
             if (!name) { alert('Введите название группы'); return; }
-            let res = await apiCall('/api/create_group', 'POST', { name: name, color: color, creator: currentUser });
-            if (res.success) {
-                document.getElementById('newGroupName').value = '';
-                await loadGroups();
-                await loadUnreadCounts();
-                selectGroup(res.group_id);
-            } else {
-                alert(res.error || 'Ошибка');
+            if (!currentUser) { alert('Вы не авторизованы'); return; }
+            
+            console.log('Создаём группу:', name, color, currentUser);
+            
+            try {
+                let res = await fetch('/api/create_group', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: name, color: color, creator: currentUser })
+                });
+                let data = await res.json();
+                console.log('Ответ сервера:', data);
+                
+                if (data.success) {
+                    document.getElementById('newGroupName').value = '';
+                    await loadGroups();
+                    await loadUnreadCounts();
+                    if (data.group_id) selectGroup(data.group_id);
+                    alert('Группа создана!');
+                } else {
+                    alert(data.error || 'Ошибка создания группы');
+                }
+            } catch(e) {
+                console.error('Ошибка:', e);
+                alert('Ошибка соединения с сервером');
             }
         }
         
@@ -808,6 +812,7 @@
             let user = await checkAuth();
             if (!user) return;
             currentUser = user;
+            
             let loginRes = await apiCall('/api/login', 'POST', { username: currentUser, password: '' });
             if (loginRes.success) {
                 currentUserColor = loginRes.color || '#0066cc';
@@ -819,14 +824,17 @@
                 let userData = users.find(u => u.username === currentUser);
                 if (userData) currentUserColor = userData.color || '#0066cc';
             }
+            
             document.getElementById('loading').style.display = 'none';
             document.getElementById('mainApp').style.display = 'block';
-            await loadAllUsers();
+            
             await loadGroups();
             await loadUnreadCounts();
             updateActiveStatus();
+            
             if (activeUpdateInterval) clearInterval(activeUpdateInterval);
             activeUpdateInterval = setInterval(() => updateActiveStatus(), 15000);
+            
             if (updateInterval) clearInterval(updateInterval);
             updateInterval = setInterval(async () => {
                 if (selectedGroup) {
@@ -835,6 +843,7 @@
                 }
                 await loadUnreadCounts();
             }, 4000);
+            
             const chatContainer = document.getElementById('groupMessages');
             if (chatContainer) {
                 chatContainer.addEventListener('scroll', () => {
