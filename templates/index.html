@@ -647,16 +647,38 @@
         }
         
         async function register() {
-            let name = document.getElementById('regName').value.trim();
-            let pass = document.getElementById('regPass').value.trim();
-            let color = document.getElementById('selectedColor').value;
-            if (!name || !pass) { document.getElementById('regError').innerText = 'Заполните поля'; return; }
-            let res = await apiCall('/api/register', 'POST', { username: name, password: pass, color });
-            if (res.success) {
-                document.getElementById('regSuccess').innerText = 'Аккаунт создан! Войдите.';
-                setTimeout(() => showLogin(), 2000);
-            } else document.getElementById('regError').innerText = res.error;
-        }
+    let name = document.getElementById('regName').value.trim();
+    let pass = document.getElementById('regPass').value.trim();
+    let color = document.getElementById('selectedColor').value;
+    let regError = document.getElementById('regError');
+    let regSuccess = document.getElementById('regSuccess');
+    regError.innerText = '';
+    regSuccess.innerText = '';
+    
+    if (!name || !pass) {
+        regError.innerText = 'Заполните оба поля';
+        return;
+    }
+    if (name === 'admin') {
+        regError.innerText = 'Это имя зарезервировано';
+        return;
+    }
+    
+    let result = await apiCall('/api/register', 'POST', { username: name, password: pass, color: color });
+    if (result.success) {
+        regSuccess.innerText = 'Аккаунт создан! Перенаправление на вход...';
+        // Автоматически перенаправляем на форму входа через 1.5 секунды
+        setTimeout(() => {
+            showLogin();
+            // Очищаем поля входа (опционально)
+            document.getElementById('loginName').value = name;
+            document.getElementById('loginPass').value = '';
+            regSuccess.innerText = '';
+        }, 1500);
+    } else {
+        regError.innerText = result.error;
+    }
+}
         
         async function login() {
             let name = document.getElementById('loginName').value.trim();
