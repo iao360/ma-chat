@@ -536,13 +536,18 @@
         
         async function loadGroups() {
             try {
-                let groups = await apiCall('/api/groups?username=' + encodeURIComponent(currentUser));
+                let response = await fetch('/api/groups?username=' + encodeURIComponent(currentUser));
+                let groups = await response.json();
+                console.log('Загружены группы:', groups);
+                
                 let container = document.getElementById('groupsList');
                 container.innerHTML = '';
-                if (!groups.length) {
+                
+                if (!groups || groups.length === 0) {
                     container.innerHTML = '<div style="text-align:center; padding:20px;">У вас нет групп.<br>Создайте первую!</div>';
                     return;
                 }
+                
                 for (let g of groups) {
                     let div = document.createElement('div');
                     div.className = 'group-item';
@@ -554,7 +559,10 @@
                     div.onclick = () => selectGroup(g.id);
                     container.appendChild(div);
                 }
-            } catch(e) { console.error('Ошибка загрузки групп:', e); }
+            } catch(e) {
+                console.error('Ошибка загрузки групп:', e);
+                document.getElementById('groupsList').innerHTML = '<div style="text-align:center; padding:20px; color:red;">Ошибка загрузки групп</div>';
+            }
         }
         
         async function selectGroup(groupId) {
@@ -771,7 +779,10 @@
                     document.getElementById('newGroupName').value = '';
                     await loadGroups();
                     await loadUnreadCounts();
-                    if (data.group_id) selectGroup(data.group_id);
+                    if (data.group_id) {
+                        selectedGroup = data.group_id;
+                        await selectGroup(data.group_id);
+                    }
                     alert('Группа создана!');
                 } else {
                     alert(data.error || 'Ошибка создания группы');
